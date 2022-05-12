@@ -4,7 +4,9 @@ import sys
 import os
 os.environ["QT_API"] = "pyside6"
 
-from qtpy import QtWidgets
+from qtpy.QtWidgets import (
+    QAction, QApplication, QFrame, QMainWindow, QVBoxLayout   # type: ignore
+)
 
 import numpy as np
 
@@ -12,17 +14,14 @@ import pyvista as pv
 from pyvistaqt import QtInteractor, MainWindow
 
 
-print(QtWidgets.QWidget)
-
-
 class MyMainWindow(MainWindow):
 
     def __init__(self, parent=None, show=True):
-        QtWidgets.QMainWindow.__init__(self, parent)
+        QMainWindow.__init__(self, parent)
 
         # create the frame
-        self.frame = QtWidgets.QFrame()
-        vlayout = QtWidgets.QVBoxLayout()
+        self.frame = QFrame()
+        vlayout = QVBoxLayout()
 
         # add the pyvista interactor object
         self.plotter = QtInteractor(self.frame)
@@ -35,29 +34,58 @@ class MyMainWindow(MainWindow):
         # simple menu to demo functions
         mainMenu = self.menuBar()
         fileMenu = mainMenu.addMenu('File')
-        exitButton = QtWidgets.QAction('Exit', self)
+        exitButton = QAction('Exit', self)
         exitButton.setShortcut('Ctrl+Q')
         exitButton.triggered.connect(self.close)
         fileMenu.addAction(exitButton)
 
         # allow adding a sphere
         meshMenu = mainMenu.addMenu('Mesh')
-        self.add_sphere_action = QtWidgets.QAction('Add Sphere', self)
+        self.add_sphere_action = QAction('Add Sphere', self)
         self.add_sphere_action.triggered.connect(self.add_sphere)
         meshMenu.addAction(self.add_sphere_action)
+
+        self.plotter.set_background('cccccc')
+        self.plotter.track_mouse_position()
+        self.add_sphere()
 
         if show:
             self.show()
 
     def add_sphere(self):
         """ add a sphere to the pyqt frame """
-        sphere = pv.Sphere()
-        self.plotter.add_mesh(sphere, show_edges=True)
+
+        points = np.array([
+            (0, 0, 0),
+            (1, 0, 0),
+            (0.5, 0.667, 0),
+        ])
+
+        cells = np.array([
+            [3, 0, 1, 2]
+        ])
+
+        mesh = pv.PolyData(points, cells)
+        pts = pv.PolyData(points)
+
+        pts.point_data['disp'] = [0, 0, 0]
+        pts.prev_id = 0
+
+        def pt_callback(mesh, i):
+            mesh.point_data['disp'][mesh.prev_id] = 0
+            mesh.point_data['disp'][i] = 1
+            mesh.prev_id = i
+
+        self.plotter.add_mesh(mesh, pickable=False, show_edges=True, line_width=5)
+        self.plotter.add_points(pts, pickable=True, point_size=50, render_points_as_spheres=True, show_scalar_bar=False)
+        self.plotter.show_axes()
+        self.plotter.view_xy()
+        self.plotter.enable_point_picking(pt_callback, show_message=False, left_clicking=True, use_mesh=True, show_point=False)
         self.plotter.reset_camera()
 
 
 def main():
     print("Welcome to Scout!")
-    app = QtWidgets.QApplication(sys.argv)
+    app = QApplication(sys.argv)
     window = MyMainWindow()
     sys.exit(app.exec_())
