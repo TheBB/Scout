@@ -1,3 +1,4 @@
+from functools import partial
 import sys
 
 # Setting the Qt bindings for QtPy
@@ -11,7 +12,9 @@ from qtpy.QtWidgets import (
 import numpy as np
 
 import pyvista as pv
-from pyvistaqt import QtInteractor, MainWindow
+from pyvistaqt import MainWindow
+
+from .plotter import ScoutPlotter
 
 
 class MyMainWindow(MainWindow):
@@ -24,7 +27,7 @@ class MyMainWindow(MainWindow):
         vlayout = QVBoxLayout()
 
         # add the pyvista interactor object
-        self.plotter = QtInteractor(self.frame)
+        self.plotter = ScoutPlotter(self.frame)
         vlayout.addWidget(self.plotter.interactor)
         self.signal_close.connect(self.plotter.close)
 
@@ -67,20 +70,14 @@ class MyMainWindow(MainWindow):
 
         mesh = pv.PolyData(points, cells)
         pts = pv.PolyData(points)
-
         pts.point_data['disp'] = [0, 0, 0]
         pts.prev_id = 0
+        mesh.associated_pts = pts
 
-        def pt_callback(mesh, i):
-            mesh.point_data['disp'][mesh.prev_id] = 0
-            mesh.point_data['disp'][i] = 1
-            mesh.prev_id = i
-
-        self.plotter.add_mesh(mesh, pickable=False, show_edges=True, line_width=5)
-        self.plotter.add_points(pts, pickable=True, point_size=50, render_points_as_spheres=True, show_scalar_bar=False)
+        self.plotter.add_mesh(mesh, pickable=True, show_edges=True, line_width=5)
+        self.plotter.add_points(pts, pickable=False, point_size=50, render_points_as_spheres=True, show_scalar_bar=False)
         self.plotter.show_axes()
         self.plotter.view_xy()
-        self.plotter.enable_point_picking(pt_callback, show_message=False, left_clicking=True, use_mesh=True, show_point=False)
         self.plotter.reset_camera()
 
 
