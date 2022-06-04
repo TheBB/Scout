@@ -494,6 +494,14 @@ python-versions = "*"
 aiohttp = "*"
 
 [[package]]
+name = "xdg"
+version = "5.1.1"
+description = "Variables defined by the XDG Base Directory Specification"
+category = "main"
+optional = false
+python-versions = ">=3.6,<4.0"
+
+[[package]]
 name = "yarl"
 version = "1.7.2"
 description = "Yet another URL library"
@@ -508,7 +516,7 @@ multidict = ">=4.0"
 [metadata]
 lock-version = "1.1"
 python-versions = "^3.8,<3.11"
-content-hash = "d5e1d92e5a68e21d04104609915b4b7faeb6db693594bcc1dc9eaae14058871e"
+content-hash = "03afddd02da73fefd04f9954c7437008474942890419725312d188a3918649ea"
 
 [metadata.files]
 aiohttp = [
@@ -1049,6 +1057,10 @@ wcwidth = [
 wslink = [
     {file = "wslink-1.5.3-py3-none-any.whl", hash = "sha256:f1e39fad3353ed06e7f3c8c7f7d3164a46d3a7447727bda8092c6d076283d618"},
     {file = "wslink-1.5.3.tar.gz", hash = "sha256:2664f3b38814c0c0e85583f846696822e7e1d968a7eb1b17f3fe61bb3a2cf286"},
+]
+xdg = [
+    {file = "xdg-5.1.1-py3-none-any.whl", hash = "sha256:865a7b56ed1d4cd2fce2ead1eddf97360843619757f473cd90b75f1817ca541d"},
+    {file = "xdg-5.1.1.tar.gz", hash = "sha256:aa619f26ccec6088b2a6018721d4ee86e602099b24644a90a8d3308a25acd06c"},
 ]
 yarl = [
     {file = "yarl-1.7.2-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:f2a8508f7350512434e41065684076f640ecce176d262a7d54f0da41d99c5a95"},
