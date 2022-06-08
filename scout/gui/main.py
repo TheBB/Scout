@@ -2,12 +2,16 @@ from pathlib import Path
 import os
 
 os.environ["QT_API"] = "pyside6"
+
+from qtpy.QtCore import Qt      # type: ignore
+
 from qtpy.QtWidgets import (
     QAction,                    # type: ignore
     QApplication,
     QFileDialog,
     QFrame,
     QMainWindow,
+    QProgressDialog,
     QVBoxLayout,
 )
 
@@ -15,6 +19,7 @@ import numpy as np
 
 import pyvista as pv
 from pyvistaqt import MainWindow
+from splipy.io import G2
 
 from .plotter import ScoutPlotter
 from ..config import Persistent
@@ -45,9 +50,6 @@ class ScoutMainWindow(MainWindow):
         # Set up the rest of the GUI
         self.setup_menu()
 
-        # Add a mesh
-        self.add_sphere()
-
     def setup_menu(self):
         """Create the menu bar"""
         menu = self.menuBar()
@@ -57,6 +59,8 @@ class ScoutMainWindow(MainWindow):
         open_action = file_menu.addAction('Open')
         open_action.setShortcut('Ctrl+O')
         open_action.triggered.connect(self.open_file)
+
+        file_menu.addSeparator()
 
         exit_action = file_menu.addAction('Exit')
         exit_action.setShortcut('Ctrl+Q')
@@ -79,32 +83,28 @@ class ScoutMainWindow(MainWindow):
         self.persistent.open_file_path = str(path.parent)
         self.persistent.open_file_filter = selected_filter
 
-    def add_sphere(self):
-        """ add a sphere to the pyqt frame """
+        with G2(str(path)) as g2:
+            patches = g2.read()
 
-        points = np.array([
-            (0, 0, 0),
-            (1, 0, 0),
-            (0.5, 0.667, 0),
-        ])
+        progress = QProgressDialog(
+            "Adding patches...",
+            "Cancel",
+            0, len(patches),
+            self,
+        )
+        progress.setWindowModality(Qt.WindowModal)
 
-        cells = np.array([
-            [3, 0, 1, 2]
-        ])
+        for i, patch in enumerate(patches, start=1):
+            if progress.wasCanceled():
+                break
+            try:
+                self.plotter.add_new_patch(patch)
+            except:
+                progress.cancel()
+                raise
+            progress.setValue(i)
 
-        mesh = pv.PolyData(points, cells)
-        pts = pv.PolyData(points)
-        pts.point_data['disp'] = [0, 0, 0]
-        pts.prev_id = 0
-        mesh.associated_pts = pts
-
-        self.plotter.add_mesh(mesh, pickable=True, show_edges=True, line_width=5)
-        self.plotter.add_points(pts, pickable=False, point_size=50, render_points_as_spheres=True, show_scalar_bar=False)
-        self.plotter.show_axes()
-        self.plotter.view_xy()
         self.plotter.reset_camera()
-        self.plotter.set_background('cccccc')
-        self.plotter.track_mouse_position()
 
 
 def run(persistent, args):

@@ -12,11 +12,12 @@ python = "^3.8,<3.11"
 pyvista = "^0.34.1"
 pyvistaqt = "^0.9.0"
 PySide6 = "^6.3.0"
-Splipy = "^1.5.8"
+splipy = {path = "../Splipy", develop = true}
 xdg = "^5.1.1"
 
 [tool.poetry.dev-dependencies]
 pytest = "^5.2"
+Cython = "^0.29.30"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
