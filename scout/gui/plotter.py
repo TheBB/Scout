@@ -1,5 +1,6 @@
 from functools import partial
 from itertools import product, chain
+from typing import Dict, Optional
 
 import numpy as np
 import vtk
@@ -12,16 +13,6 @@ from pyvistaqt import QtInteractor
 
 from splipy import SplineModel
 from splipy.splinemodel import TopologicalNode
-
-
-def subdiv(grid):
-    import vtk
-    filt = vtk.vtkDataSetSurfaceFilter()
-    filt.SetInputDataObject(grid)
-    filt.SetNonlinearSubdivisionLevel(2)
-    filt.Update()
-    ngrid = filt.GetOutputDataObject(0)
-    return pv.wrap(ngrid)
 
 
 def cell_enumerate(start, *npts):
@@ -51,56 +42,29 @@ def cell_enumerate(start, *npts):
     return start + retval[0], retval
 
 
+def _subdivide(order, knots):
+    f = [i/(order - 1) for i in range(order - 1)]
+    for i, kt in enumerate(knots[:-1]):
+        rt = knots[i+1]
+        for ff in f:
+            yield (1 - ff) * kt + ff * rt
+    yield knots[-1]
+
+
+def subdivide(order, knots):
+    if order == 2:
+        return knots
+    return list(_subdivide(order, knots))
+
+
 def bezierize(obj):
     if obj.pardim not in (1, 2):
         return None
 
     obj.set_dimension(3)
-
-    for direction in range(obj.pardim):
-        for kt in obj.knots(direction):
-            while obj.bases[direction].continuity(kt) > -1:
-                obj.insert_knot(kt, direction)
-
-    lengths = obj.order()
-    npts_per_cell = np.prod(lengths)
-    ncells = np.prod([n//l for n, l in zip(obj.controlpoints.shape, lengths)])
-
-    points = np.empty((ncells, npts_per_cell, 3))
-    weights = np.empty((ncells, npts_per_cell))
-    degrees = np.empty((ncells, obj.pardim + 1), dtype=int)
-    degrees[:, :-1] = tuple(k-1 for k in obj.order())
-    degrees[:, -1] = npts_per_cell
-    celltypes = np.empty((ncells,), dtype=np.uint8)
-    celltypes[:] = {
-        1: vtk.VTK_BEZIER_CURVE,
-        2: vtk.VTK_BEZIER_QUADRILATERAL,
-    }[obj.pardim]
-
-    cells = np.empty((ncells, npts_per_cell + 1), dtype=int)
-    point_id = 0
-
-    roots = [range(0, n, l) for n, l in zip(obj.controlpoints.shape, lengths)]
-    for cell_id, root_idx in enumerate(product(*roots)):
-        if cell_id >= ncells:
-            break
-        slice_expr = tuple(slice(r, r+l) for r, l in zip(root_idx, lengths))
-        cell_points = obj.controlpoints[(*slice_expr, ...)]
-        points[cell_id, ...] = cell_points[..., :3].reshape(-1, 3)
-        if obj.rational:
-            weights[cell_id, ...] = cell_points[..., 3].reshape(-1)
-        else:
-            weights[cell_id, ...] = 1
-        point_id, cells[cell_id, ...] = cell_enumerate(point_id, *lengths)
-
-    points /= weights[..., np.newaxis]
-
-    mesh = pv.UnstructuredGrid(cells, celltypes, points.reshape(-1,3))
-    mesh.point_data.VTKObject.SetRationalWeights(convert_array(weights.reshape(-1)))
-
-    if obj.pardim > 1:
-        mesh.cell_data.VTKObject.SetHigherOrderDegrees(convert_array(degrees))
-
+    evalpts = [subdivide(order, kts) for order, kts in zip(obj.order(), obj.knots())]
+    points = obj(*evalpts)
+    mesh = pv.StructuredGrid(points[..., 0], points[..., 1], points[..., 2])
     return mesh
 
 
@@ -109,24 +73,28 @@ class ScoutPlotter(QtInteractor):
     model: SplineModel
 
     _successful_pick: bool = False
+    _picked_actor: Optional[vtk.vtkOpenGLActor] = None
+
+    _nodes: Dict[int, TopologicalNode]
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self._nodes = dict()
 
         self.model = SplineModel(pardim=3, dimension=3)
         self.model.add_callback('add', self.add_new_node_callback)
 
         self.iren.interactor.AddObserver('LeftButtonPressEvent', partial(try_callback, self.launch_pick_event))
 
-        point_picker = _vtk.vtkPointPicker()
-        point_picker.SetTolerance(0.025)
-        point_picker.AddObserver(_vtk.vtkCommand.EndPickEvent, self.point_pick_callback)
+        # point_picker = _vtk.vtkPointPicker()
+        # point_picker.SetTolerance(0.025)
+        # point_picker.AddObserver(_vtk.vtkCommand.EndPickEvent, self.point_pick_callback)
 
         mesh_picker = _vtk.vtkPropPicker()
         mesh_picker.AddObserver(_vtk.vtkCommand.EndPickEvent, self.mesh_pick_callback)
 
         self.pickers = [
-            point_picker,
+            # point_picker,
             mesh_picker,
         ]
 
@@ -145,18 +113,21 @@ class ScoutPlotter(QtInteractor):
         obj = bezierize(node.obj)
         if obj is None:
             return
-        jobj = subdiv(obj)
+
         if node.obj.pardim == 1:
-            self.add_mesh(jobj, pickable=True, line_width=5, show_edges=True, color='000000')
+            actor = self.add_mesh(obj, pickable=True, line_width=5, show_edges=True, color='000000')
         else:
-            self.add_mesh(jobj, pickable=True)
-        # self.add_points(pv.PolyData(obj.points), point_size=20, render_points_as_spheres=True)
+            actor = self.add_mesh(obj, pickable=True)
+        self._nodes[actor.GetAddressAsString('')] = node
 
     def point_pick_callback(self, picker, event):
+        return
         point_id = picker.GetPointId()
         if point_id < 0:
             return
         mesh = picker.GetDataSet()
+        picker.GetActor().GetProperty().SetColor(0, 0, 0)
+        print(picker.GetActor())
         # pts = mesh.associated_pts
         # pts.point_data['disp'][pts.prev_id] = 0
         # pts.point_data['disp'][point_id] = 1
@@ -164,10 +135,29 @@ class ScoutPlotter(QtInteractor):
         self._successful_pick = True
 
     def mesh_pick_callback(self, picker, event):
+        if self._picked_actor:
+            picked_node = self._nodes[self._picked_actor.GetAddressAsString('')]
+            if picked_node.pardim == 1:
+                self._picked_actor.GetProperty().SetColor(0, 0, 0)
+            else:
+                self._picked_actor.GetProperty().SetColor(1, 1, 1)
+        self.remove_actor('controlpoints')
+
         actor = picker.GetActor()
         if not actor:
             return
-        mesh = actor.GetMapper().GetInput()
+
+        node = self._nodes.get(actor.GetAddressAsString(''))
+        if not node:
+            return
+
+        cps = node.obj.controlpoints[..., :3].reshape(-1, 3).copy()
+        if node.obj.rational:
+            cps /= node.obj.controlpoints[..., -1].reshape(-1, 1)
+
+        self.add_points(pv.PolyData(cps), render_points_as_spheres=True, point_size=10, name='controlpoints')
+        actor.GetProperty().SetColor(1, 196/255, 87/255)
+        self._picked_actor = actor
         self._successful_pick = True
 
     def launch_pick_event(self, interactor, event):

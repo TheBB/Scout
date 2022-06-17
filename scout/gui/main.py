@@ -15,9 +15,6 @@ from qtpy.QtWidgets import (
     QVBoxLayout,
 )
 
-import numpy as np
-
-import pyvista as pv
 from pyvistaqt import MainWindow
 from splipy.io import G2
 
