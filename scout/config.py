@@ -14,11 +14,15 @@ class Persistent:
     _cache_names = {
         'open_file_path',
         'open_file_filter',
+        'main_splitter_left',
+        'main_splitter_right',
     }
 
     _defaults = {
         'open_file_path': os.getcwd,
         'open_file_filter': lambda: 'G2 files (*.g2)',
+        'main_splitter_left': lambda: 500,
+        'main_splitter_right': lambda: 100,
     }
 
     def __enter__(self):

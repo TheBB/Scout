@@ -134,7 +134,7 @@ class ScoutPlotter(QtInteractor):
         # pts.prev_id = point_id
         self._successful_pick = True
 
-    def mesh_pick_callback(self, picker, event):
+    def unpick(self):
         if self._picked_actor:
             picked_node = self._nodes[self._picked_actor.GetAddressAsString('')]
             if picked_node.pardim == 1:
@@ -143,13 +143,21 @@ class ScoutPlotter(QtInteractor):
                 self._picked_actor.GetProperty().SetColor(1, 1, 1)
         self.remove_actor('controlpoints')
 
+    def mesh_pick_callback(self, picker, event):
         actor = picker.GetActor()
         if not actor:
+            self.unpick()
             return
 
         node = self._nodes.get(actor.GetAddressAsString(''))
         if not node:
+            self.unpick()
             return
+
+        if node.obj.pardim == 1:
+            return
+
+        self.unpick()
 
         cps = node.obj.controlpoints[..., :3].reshape(-1, 3).copy()
         if node.obj.rational:
