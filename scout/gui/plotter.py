@@ -1,45 +1,27 @@
 from functools import partial
 from itertools import product, chain
-from typing import Dict, Optional
+
+from typing import Dict, Optional, Tuple, List
 
 import numpy as np
-import vtk
+
+from qtpy.QtCore import Qt
 
 import pyvista as pv
 import pyvista._vtk as _vtk
 from pyvista.utilities import try_callback
 from pyvista.utilities.helpers import convert_array
 from pyvistaqt import QtInteractor
+import pyvistaqt.rwi as rwi
+
+import vtk
+from vtkmodules.vtkCommonCore import vtkCommand
+from vtkmodules.vtkRenderingCore import vtkPropPicker
+
+from loguru import logger
 
 from splipy import SplineModel
 from splipy.splinemodel import TopologicalNode
-
-
-def cell_enumerate(start, *npts):
-    if len(npts) == 1:
-        nx, = npts
-        retval = np.array([nx, 0, nx - 1, *range(1, nx - 1)], dtype=int)
-    elif len(npts) == 2:
-        nx, ny = npts
-        umax = (nx - 1) * ny
-        vmax = ny - 1
-        uvmax = nx * ny - 1
-        retval = np.array([
-            nx * ny,
-            0, umax, uvmax, vmax,
-            *range(0, umax, ny)[1:],
-            *range(umax, uvmax)[1:],
-            *range(vmax, uvmax, ny)[1:],
-            *range(0, vmax)[1:],
-            *chain.from_iterable(
-                range(k, umax + k, ny)[1:]
-                for k in range(0, vmax)[1:]
-            ),
-        ])
-    else:
-        raise ValueError(len(npts))
-    retval[1:] += start
-    return start + retval[0], retval
 
 
 def _subdivide(order, knots):
@@ -72,26 +54,38 @@ class ScoutPlotter(QtInteractor):
 
     model: SplineModel
 
-    _successful_pick: bool = False
-    _picked_actor: Optional[vtk.vtkOpenGLActor] = None
-
     _nodes: Dict[int, TopologicalNode]
+    _picked_actors = List[vtk.vtkOpenGLActor]
 
-    def __init__(self, *args, **kwargs):
+    # Set to true by a picking callback when something was found
+    _successful_pick: bool = False
+
+    # Set when mouse is clicked to detect movement events upon release
+    _mouse_moved: bool = False
+
+    _append_when_picked: bool = False
+    _inhibit_release_pick: bool = False
+
+    def __init__(self, model, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._nodes = dict()
 
-        self.model = SplineModel(pardim=3, dimension=3)
+        self._nodes = dict()
+        self._picked_actors = []
+
+        self.model = model
         self.model.add_callback('add', self.add_new_node_callback)
 
-        self.iren.interactor.AddObserver('LeftButtonPressEvent', partial(try_callback, self.launch_pick_event))
+        # We also listen to mouse release events, but due to a bug in VTK we have to intercept them earlier
+        self._Iren.AddObserver('LeftButtonPressEvent', partial(try_callback, self.left_btn_press))
+        self._Iren.AddObserver('KeyPressEvent', partial(try_callback, self.key_press))
+        self._Iren.AddObserver('KeyReleaseEvent', partial(try_callback, self.key_release))
 
         # point_picker = _vtk.vtkPointPicker()
         # point_picker.SetTolerance(0.025)
         # point_picker.AddObserver(_vtk.vtkCommand.EndPickEvent, self.point_pick_callback)
 
-        mesh_picker = _vtk.vtkPropPicker()
-        mesh_picker.AddObserver(_vtk.vtkCommand.EndPickEvent, self.mesh_pick_callback)
+        mesh_picker = vtkPropPicker()
+        mesh_picker.AddObserver(vtkCommand.EndPickEvent, self.mesh_pick_callback)
 
         self.pickers = [
             # point_picker,
@@ -104,12 +98,7 @@ class ScoutPlotter(QtInteractor):
         self.set_background('cccccc')
         self.track_mouse_position()
 
-    def add_new_patch(self, patch):
-        """Callback for the open file menu item."""
-        self.model.add(patch, raise_on_twins=False)
-
     def add_new_node_callback(self, node: TopologicalNode):
-        """Callback for when a new node is added to the model."""
         obj = bezierize(node.obj)
         if obj is None:
             return
@@ -119,6 +108,19 @@ class ScoutPlotter(QtInteractor):
         else:
             actor = self.add_mesh(obj, pickable=True)
         self._nodes[actor.GetAddressAsString('')] = node
+
+        self.reset_camera()
+
+    def unpick(self):
+        for actor in self._picked_actors:
+            address = actor.GetAddressAsString('')
+            picked_node = self._nodes[address]
+            if picked_node.pardim == 1:
+                actor.GetProperty().SetColor(0, 0, 0)
+            else:
+                actor.GetProperty().SetColor(1, 1, 1)
+            self.remove_actor(f'controlpoints-{address}')
+        self._picked_actors = []
 
     def point_pick_callback(self, picker, event):
         return
@@ -134,46 +136,74 @@ class ScoutPlotter(QtInteractor):
         # pts.prev_id = point_id
         self._successful_pick = True
 
-    def unpick(self):
-        if self._picked_actor:
-            picked_node = self._nodes[self._picked_actor.GetAddressAsString('')]
-            if picked_node.pardim == 1:
-                self._picked_actor.GetProperty().SetColor(0, 0, 0)
-            else:
-                self._picked_actor.GetProperty().SetColor(1, 1, 1)
-        self.remove_actor('controlpoints')
-
     def mesh_pick_callback(self, picker, event):
         actor = picker.GetActor()
         if not actor:
-            self.unpick()
+            if not self._append_when_picked:
+                logger.debug('Failed to find actor - unpicking')
+                self.unpick()
             return
 
-        node = self._nodes.get(actor.GetAddressAsString(''))
+        address = actor.GetAddressAsString('')
+        node = self._nodes.get(address)
         if not node:
-            self.unpick()
+            if not self._append_when_picked:
+                logger.debug('Failed to find node - unpicking')
+                self.unpick()
             return
 
         if node.obj.pardim == 1:
             return
 
-        self.unpick()
+        if not self._append_when_picked:
+            logger.debug('Picked in non-append mode - unpicking')
+            self.unpick()
 
         cps = node.obj.controlpoints[..., :3].reshape(-1, 3).copy()
         if node.obj.rational:
             cps /= node.obj.controlpoints[..., -1].reshape(-1, 1)
 
-        self.add_points(pv.PolyData(cps), render_points_as_spheres=True, point_size=10, name='controlpoints')
+        self.add_points(pv.PolyData(cps), render_points_as_spheres=True, point_size=10, name=f'controlpoints-{address}')
         actor.GetProperty().SetColor(1, 196/255, 87/255)
-        self._picked_actor = actor
+        self._picked_actors.append(actor)
         self._successful_pick = True
 
-    def launch_pick_event(self, interactor, event):
+    def do_pick(self, interactor, append: bool = False):
         click_x, click_y = interactor.GetEventPosition()
         renderer = interactor.GetInteractorStyle()._parent()._plotter.renderer
 
+        self._append_when_picked = append
         self._successful_pick = False
         for picker in self.pickers:
             picker.Pick(click_x, click_y, 0, renderer)
             if self._successful_pick:
-                return
+                break
+
+        self._append_when_picked = False
+
+    def left_btn_press(self, interactor, event):
+        self._mouse_moved = False
+        if interactor.GetControlKey():
+            logger.debug('Launch append-pick')
+            self.do_pick(self._Iren, append=True)
+            self._inhibit_release_pick = True
+
+    def key_press(self, interactor, event):
+        # print('press', interactor.GetControlKey(), interactor.GetShiftKey(), interactor.GetKeyCode(), interactor.GetKeySym())
+        pass
+
+    def key_release(self, interactor, event):
+        # print('release', interactor.GetControlKey(), interactor.GetShiftKey(), interactor.GetKeyCode(), interactor.GetKeySym())
+        pass
+
+    def mouseReleaseEvent(self, ev):
+        retval = super().mouseReleaseEvent(ev)
+        if self._ActiveButton == Qt.MouseButton.LeftButton and not self._mouse_moved and not self._inhibit_release_pick:
+            logger.debug('Launch normal pick')
+            self.do_pick(self._Iren)
+        self._inhibit_release_pick = False
+        return retval
+
+    def mouseMoveEvent(self, ev):
+        self._mouse_moved = True
+        return super().mouseMoveEvent(ev)

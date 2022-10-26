@@ -1,9 +1,13 @@
 import sys
 
-from .gui.main import run
 from .config import Persistent
+from .gui.main import run
 
 
 def main():
     with Persistent() as persistent:
-        sys.exit(run(persistent, sys.argv))
+        run(persistent, sys.argv)
+
+
+if __name__ == '__main__':
+    main()
