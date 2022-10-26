@@ -1,7 +1,7 @@
 from functools import partial
 from itertools import product, chain
 
-from typing import Dict, Optional, Tuple, List
+from typing import Dict, Optional, Tuple, List, Iterable
 
 import numpy as np
 
@@ -54,7 +54,10 @@ class ScoutPlotter(QtInteractor):
 
     model: SplineModel
 
-    _nodes: Dict[int, TopologicalNode]
+    # Mapping actor address to node
+    _nodes: Dict[str, TopologicalNode]
+
+    # List of selected actors
     _picked_actors = List[vtk.vtkOpenGLActor]
 
     # Set to true by a picking callback when something was found
@@ -109,7 +112,10 @@ class ScoutPlotter(QtInteractor):
             actor = self.add_mesh(obj, pickable=True)
         self._nodes[actor.GetAddressAsString('')] = node
 
-        self.reset_camera()
+    def selected_nodes(self) -> Iterable[TopologicalNode]:
+        for actor in self._picked_actors:
+            address = actor.GetAddressAsString('')
+            yield self._nodes[address]
 
     def unpick(self):
         for actor in self._picked_actors:

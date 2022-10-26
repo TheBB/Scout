@@ -6,7 +6,7 @@ os.environ['QT_API'] = 'pyside6'
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-from typing import List
+from typing import List, Iterable
 
 from qtpy.QtCore import (
     Qt,         # type: ignore
@@ -33,83 +33,10 @@ from loguru import logger
 from splipy.io import G2
 from splipy import SplineModel
 from splipy.splinemodel import TopologicalNode
+import splipy.volume_factory as vf
 
 from ..config import Persistent
 from .plotter import ScoutPlotter
-
-
-def point_as_string(pt):
-    nums = ', '.join(f'{s:.2g}' for s in pt)
-    return f'({nums})'
-
-
-class Problem(ABC):
-
-    nodes: List[TopologicalNode]
-
-    @abstractmethod
-    def short_desc(self) -> str:
-        pass
-
-    @abstractmethod
-    def long_desc(self) -> str:
-        pass
-
-    def layout(self) -> QLayout:
-        label = QLabel()
-        label.setText(str(self))
-        layout = QVBoxLayout()
-        layout.addWidget(label)
-        return layout
-
-
-class DegenerateProblem(Problem):
-
-    def __init__(self, node):
-        self.nodes = [node]
-
-    def short_desc(self):
-        node = self.nodes[0]
-        if node.pardim == 1:
-            return 'Degenerate edge'
-        if node.pardim == 2:
-            return 'Degenerate face'
-        assert node.pardim == 3
-        return 'Degenerate volume'
-
-    def long_desc(self):
-        node = self.nodes[0]
-        corners = [point_as_string(c) for c in node.obj.corners()]
-        if node.pardim == 1:
-            return f'Edge from {corners[0]} to {corners[1]} is degenerate'
-        if node.pardim == 2:
-            cstr = ', '.join(str(c) for c in corners[:-1])
-            return f'Face joining {cstr} and {corners[-1]} is degenerate'
-        assert node.pardim == 3
-        cstr = ', '.join(str(c) for c in corners[:-1])
-        return f'Volume joining {cstr}, and {corners[-1]} is degenerate'
-
-
-class TwinProblem(Problem):
-
-    def __init__(self, nodes):
-        self.nodes = nodes
-
-    def short_desc(self):
-        if self.nodes[0].pardim == 1:
-            return f'Incompatible edges ({len(self.nodes)})'
-        if self.nodes[0].pardim == 2:
-            return f'Incompatible faces ({len(self.nodes)})'
-        assert self.nodes[0].pardim == 3
-        return f'Incompatible volumes ({len(self.nodes)})'
-
-    def long_desc(self):
-        if self.nodes[0].pardim == 1:
-            return f'{len(self.nodes)} edges appear coincident but are incompatible'
-        if self.nodes[0].pardim == 2:
-            return f'{len(self.nodes)} faces appear coincident but are incompatible'
-        assert self.nodes[0].pardim == 3
-        return f'{len(self.nodes)} volumes appear coincident but are incompatible'
 
 
 class ProblemsPanel(QWidget):
@@ -126,17 +53,7 @@ class ProblemsPanel(QWidget):
 
         layout = QVBoxLayout(self)
         layout.addWidget(self.tree)
-        layout.addStretch(1)
         self.setLayout(layout)
-
-    def make_problems(self) -> List[Problem]:
-        problems = []
-        for pardim in range(1, 4):
-            for node in self.model.degenerate_nodes(pardim):
-                problems.append(DegenerateProblem(node))
-            for cls in self.model.twin_nodes(pardim):
-                problems.append(TwinProblem(list(cls)))
-        return problems
 
     def _degenerate_at_dim(self, dim: int) -> QTreeWidgetItem:
         items = [
@@ -181,13 +98,35 @@ class ProblemsPanel(QWidget):
 
 class OperationsPanel(QWidget):
 
-    def __init__(self, model: SplineModel, parent = None):
+    main: ScoutMainWindow
+
+    def __init__(self, main: ScoutMainWindow, parent = None):
         super().__init__(parent)
 
+        self.main = main
+
         layout = QVBoxLayout()
-        layout.addWidget(QPushButton('Extrude'))
+
+        extrude = QPushButton('Extrude')
+        extrude.clicked.connect(self.extrude)
+        layout.addWidget(extrude)
+
         layout.addStretch(1)
         self.setLayout(layout)
+
+    def extrude(self, *args, **kwargs):
+        nodes = [
+            node for node in self.main.selected_nodes()
+            if node.pardim == 2
+        ]
+
+        new_objects = [
+            vf.extrude(node.obj, amount=(0, 0, 1))
+            for node in nodes
+        ]
+
+        for obj in new_objects:
+            self.main.model.add(obj, raise_on_twins=False)
 
 
 class ScoutMainWindow(QMainWindow):
@@ -220,7 +159,7 @@ class ScoutMainWindow(QMainWindow):
 
         # Create the operations panel
         logger.debug("Initializing Operations")
-        self.operations = OperationsPanel(self.model, self)
+        self.operations = OperationsPanel(self, self)
         self.make_dock(self.operations, "Operations")
 
         self.setup_menu()
@@ -302,6 +241,9 @@ class ScoutMainWindow(QMainWindow):
 
         self.plotter.reset_camera()
         self.problems.refresh()
+
+    def selected_nodes(self) -> Iterable[TopologicalNode]:
+        yield from self.plotter.selected_nodes()
 
 
 def run(persistent, args):
